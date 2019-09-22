@@ -3,7 +3,7 @@ use crate::source_analysis::*;
 use crate::traces::*;
 use cargo::core::Workspace;
 use gimli::*;
-use log::debug;
+use log::{debug, trace};
 use memmap::MmapOptions;
 use object::{File as OFile, Object};
 use rustc_demangle::demangle;
@@ -126,7 +126,8 @@ where
 }
 
 fn get_addresses_from_program<R, Offset>(
-    prog: IncompleteLineNumberProgram<R>,
+    prog: IncompleteLineProgram<R>,
+    debug_strs: &DebugStr<R>,
     entries: &[(u64, LineType)],
     project: &Path,
     result: &mut HashMap<SourceLocation, Vec<TracerData>>,
@@ -135,6 +136,7 @@ where
     R: Reader<Offset = Offset>,
     Offset: ReaderOffset,
 {
+    let get_string = |x: R| x.to_string().map(|y| y.to_string()).ok();
     let (cprog, seq) = prog.sequences()?;
     for s in seq {
         let mut temp_map: HashMap<SourceLocation, TracerData> = HashMap::new();
@@ -147,8 +149,8 @@ where
             if let Some(file) = ln_row.file(header) {
                 let mut path = project.to_path_buf();
                 if let Some(dir) = file.directory(header) {
-                    if let Ok(temp) = dir.to_string() {
-                        path.push(temp.as_ref());
+                    if let Some(temp) = dir.string_value(debug_strs).and_then(get_string) {
+                        path.push(temp);
                     }
                 }
 
@@ -169,8 +171,8 @@ where
                     if let Some(file) = ln_row.file(header) {
                         let line = ln_row.line().unwrap();
                         let file = file.path_name();
-                        if let Ok(file) = file.to_string() {
-                            path.push(file.as_ref());
+                        if let Some(file) = file.string_value(debug_strs).and_then(get_string) {
+                            path.push(file);
                             if !path.is_file() {
                                 // Not really a source file!
                                 continue;
@@ -252,7 +254,8 @@ fn get_line_addresses(
             };
             let prog = debug_line.program(offset, addr_size, None, None)?;
             let mut temp_map: HashMap<SourceLocation, Vec<TracerData>> = HashMap::new();
-            if let Err(e) = get_addresses_from_program(prog, &entries, project, &mut temp_map) {
+
+            if let Err(e) = get_addresses_from_program(prog, &debug_strings, &entries, project, &mut temp_map) {
                 debug!("Potential issue reading test addresses {}", e);
             } else {
                 // Deduplicate addresses
@@ -272,6 +275,20 @@ fn get_line_addresses(
                 let mut tracemap = TraceMap::new();
                 for (k, val) in &temp_map {
                     for v in val.iter() {
+                        let rpath = config.strip_base_dir(&k.path);
+                        match v.address {
+                            Some(ref a) => trace!(
+                                "Adding trace at address 0x{:x} in {}:{}",
+                                a,
+                                rpath.display(),
+                                k.line
+                            ),
+                            None => trace!(
+                                "Adding trace with no address at {}:{}",
+                                rpath.display(),
+                                k.line
+                            ),
+                        }
                         tracemap.add_trace(
                             &k.path,
                             Trace {
@@ -296,6 +313,12 @@ fn get_line_addresses(
             let line = *line as u64;
             if !result.contains_location(file, line) && !line_analysis.should_ignore(line as usize)
             {
+                let rpath = config.strip_base_dir(file);
+                trace!(
+                    "Adding trace for potentially uncoverable line in {}:{}",
+                    rpath.display(),
+                    line
+                );
                 result.add_trace(
                     file,
                     Trace {
@@ -311,13 +334,24 @@ fn get_line_addresses(
     Ok(result)
 }
 
+#[cfg(target_os = "linux")]
+fn open_symbols_file(test: &Path) -> io::Result<File> {
+    File::open(test)
+}
+
+#[cfg(target_os = "macos")]
+fn open_symbols_file(test: &Path) -> io::Result<File> {
+    let d_sym = test.with_extension("dSYM");
+    File::open(&d_sym)
+}
+
 pub fn generate_tracemap(
     project: &Workspace,
     test: &Path,
     config: &Config,
 ) -> io::Result<TraceMap> {
     let manifest = project.root();
-    let file = File::open(test)?;
+    let file = open_symbols_file(test)?;
     let file = unsafe { MmapOptions::new().map(&file)? };
     if let Ok(obj) = OFile::parse(&*file) {
         let analysis = get_line_analysis(project, config);
