@@ -11,7 +11,7 @@ use regex::Regex;
 use self::parse::*;
 
 mod parse;
-mod types;
+pub mod types;
 
 /// Specifies the current configuration tarpaulin is using.
 #[derive(Debug)]
@@ -61,6 +61,8 @@ pub struct Config {
     pub no_default_features: bool,
     /// Features to include in the target project build
     pub features: Vec<String>,
+    /// Unstable cargo features to use
+    pub unstable_features: Vec<String>,
     /// Build all packages in the workspace
     pub all: bool,
     /// Packages to include when building the target project
@@ -75,6 +77,16 @@ pub struct Config {
     pub test_timeout: Duration,
     /// Build in release mode
     pub release: bool,
+    /// Build the tests only don't run coverage
+    pub no_run: bool,
+    /// Don't update `Cargo.lock`.
+    pub locked: bool,
+    /// Don't update `Cargo.lock` or any caches.
+    pub frozen: bool,
+    /// Directory for generated artifacts
+    pub target_dir: Option<PathBuf>,
+    /// Run tarpaulin on project without accessing the network
+    pub offline: bool,
 }
 
 impl Default for Config {
@@ -100,6 +112,7 @@ impl Default for Config {
             forward_signals: false,
             no_default_features: false,
             features: vec![],
+            unstable_features: vec![],
             all: false,
             packages: vec![],
             exclude: vec![],
@@ -108,6 +121,11 @@ impl Default for Config {
             test_timeout: Duration::from_secs(60),
             release: false,
             all_features: false,
+            no_run: false,
+            locked: false,
+            frozen: false,
+            target_dir: None,
+            offline: false,
         }
     }
 }
@@ -138,13 +156,19 @@ impl<'a> From<&'a ArgMatches<'a>> for Config {
             all_features: args.is_present("all-features"),
             no_default_features: args.is_present("no-default-features"),
             features: get_list(args, "features"),
-            all: args.is_present("all"),
+            unstable_features: get_list(args, "Z"),
+            all: args.is_present("all") | args.is_present("workspace"),
             packages: get_list(args, "packages"),
             exclude: get_list(args, "exclude"),
             excluded_files: get_excluded(args),
             varargs: get_list(args, "args"),
             test_timeout: get_timeout(args),
             release: args.is_present("release"),
+            no_run: args.is_present("no-run"),
+            locked: args.is_present("locked"),
+            frozen: args.is_present("frozen"),
+            target_dir: get_target_dir(args),
+            offline: args.is_present("offline"),
         }
     }
 }

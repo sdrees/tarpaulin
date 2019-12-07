@@ -10,6 +10,32 @@ file.
 
 ### Removed
 
+## [0.10.0] 2019-12-07  
+### Added
+- `--locked` and `--frozen` options to mirror `cargo test` options
+- `--target-dir` option to mirror `cargo test` and `cargo build` options
+- `--offline` option to mirror `cargo test` and `cargo build` options
+
+### Changed
+- Fixed issue where examples were ran with `RunType::Tests`
+- No longer pass `--quiet` to examples
+- Updated futures test for stable features
+- Split up docker run stages to optimise build times and added `.dockerignore`
+
+### Removed
+
+## [0.9.2] 2019-11-19
+### Added
+- Added Benchmarks to `RunType` to allow coverage of benchmark tests to be collected
+- Added Examples to `RunType` to allow coverage of examples to be collected
+- Instructions for integration to Gitlab pipelines to `README.md`
+- `--no-run` option to build tests and not collect coverage
+- Added run-to-run coverage change reporting through saving the previous run in `target/tarpaulin/coverage.json`
+
+### Changed
+
+### Removed
+
 ## [0.9.1] 2019-10-30
 ### Added
 - Sets an environment variable `TARPAULIN` to `1` when starting so inferiors can detect coverage runs
