@@ -10,6 +10,49 @@ file.
 
 ### Removed
 
+## [0.12.3] - 2020-04-16
+### Added
+- Ignore hidden files and folders based on a dot prefix to the folder or filename 
+
+### Changed
+- Update object and if an ELF section can't be parsed return an io error instead of letting it continue 
+with an empty section
+- Removed forcing of `opt-level` to 0
+- When `--debug` is provided now print the cargo command/arg list and pass `-vvv` to cargo
+- Create target directory if option given via `--target-dir` doesn't exist
+
+### Removed
+
+## [0.12.2] 2020-04-11
+### Changed
+- Fill in `CARGO_PKG_NAME`, `CARG_PKG_VERSION`, `CARGO_PKG_AUTHORS` and 
+`CARGO_MANIFEST_DIR` environment variables when launching tests
+- Filter out executables where profile test is false and run type is `Tests`
+
+## [0.12.1] 2020-04-09
+### Added
+
+### Changed
+- Can now pass a list of values for `--run-types`
+
+### Removed
+
+### Fixed
+- Get manifest directory for packages in workspace so working directory is the same as before 0.12.0
+
+## [0.12.0] 2020-04-06
+### Added
+- Concept of logical lines to map multiple physical lines to a single line for statistics added for split lets statements
+
+### Changed
+- Reverted Dockerfiles to full images added dockerfiles with `-slim` postfix for slim images
+- Added cURL to the slim images
+- `todo!()` macros are now ignored with the `--ignore-panics` flag
+- The HTML output report will no longer fail if a previous run contains a source file that no longer exists
+- Process expression preceding method call in source analysis
+
+### Removed
+
 ## [0.11.1] 2020-03-13
 ### Added
 - Add support for JSON output, including public functions for querying reports programmatically.
@@ -17,7 +60,7 @@ file.
 ### Changed
 - Pulled `trace` function out of `run` in `main.rs` in order to expose public function for creating
   `TraceMap` structs.
-
+- Moved Dockerfiles to slim images
 
 ## [0.11.0] 2020-02-26
 ### Added

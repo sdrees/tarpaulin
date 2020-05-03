@@ -1,11 +1,11 @@
 use crate::config::Config;
 use crate::source_analysis::*;
 use crate::traces::*;
-use cargo::core::Workspace;
+use gimli::read::Error;
 use gimli::*;
-use log::{debug, trace};
+use log::{debug, error, trace};
 use memmap::MmapOptions;
-use object::{File as OFile, Object};
+use object::{read::ObjectSection, File as OFile, Object};
 use rustc_demangle::demangle;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -44,6 +44,15 @@ pub enum LineType {
 struct SourceLocation {
     pub path: PathBuf,
     pub line: u64,
+}
+
+impl From<(PathBuf, usize)> for SourceLocation {
+    fn from(other: (PathBuf, usize)) -> Self {
+        Self {
+            path: other.0,
+            line: other.1 as u64,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -176,9 +185,12 @@ where
                 } else {
                     path.starts_with(project.join("target"))
                 };
+                let is_hidden = path
+                    .into_iter()
+                    .any(|x| x.to_string_lossy().starts_with("."));
 
                 // Source is part of project so we cover it.
-                if !is_target && path.starts_with(project) {
+                if !is_target && !is_hidden && path.starts_with(project) {
                     if let Some(file) = ln_row.file(header) {
                         let line = ln_row.line().unwrap();
                         let file = file.path_name();
@@ -226,17 +238,19 @@ fn get_line_addresses(
     analysis: &HashMap<PathBuf, LineAnalysis>,
     config: &Config,
 ) -> Result<TraceMap> {
+    let io_err = |e| {
+        error!("Io error parsing section: {}", e);
+        Error::Io
+    };
     let mut result = TraceMap::new();
-    let debug_info = obj.section_data_by_name(".debug_info").unwrap_or_default();
-    let debug_info = DebugInfo::new(&debug_info, endian);
-    let debug_abbrev = obj
-        .section_data_by_name(".debug_abbrev")
-        .unwrap_or_default();
-    let debug_abbrev = DebugAbbrev::new(&debug_abbrev, endian);
-    let debug_strings = obj.section_data_by_name(".debug_str").unwrap_or_default();
-    let debug_strings = DebugStr::new(&debug_strings, endian);
-    let debug_line = obj.section_data_by_name(".debug_line").unwrap_or_default();
-    let debug_line = DebugLine::new(&debug_line, endian);
+    let debug_info = obj.section_by_name(".debug_info").ok_or(Error::Io)?;
+    let debug_info = DebugInfo::new(debug_info.data().map_err(io_err)?, endian);
+    let debug_abbrev = obj.section_by_name(".debug_abbrev").ok_or(Error::Io)?;
+    let debug_abbrev = DebugAbbrev::new(debug_abbrev.data().map_err(io_err)?, endian);
+    let debug_strings = obj.section_by_name(".debug_str").ok_or(Error::Io)?;
+    let debug_strings = DebugStr::new(debug_strings.data().map_err(io_err)?, endian);
+    let debug_line = obj.section_by_name(".debug_line").ok_or(Error::Io)?;
+    let debug_line = DebugLine::new(debug_line.data().map_err(io_err)?, endian);
 
     let mut iter = debug_info.units();
     while let Ok(Some(cu)) = iter.next() {
@@ -280,6 +294,11 @@ fn get_line_addresses(
                     .filter(|&(ref k, _)| !(config.exclude_path(&k.path)))
                     .filter(|&(ref k, _)| {
                         !analysis.should_ignore(k.path.as_ref(), &(k.line as usize))
+                    })
+                    .map(|(k, v)| {
+                        let ret = analysis.normalise(k.path.as_ref(), k.line as usize);
+                        let k_n = SourceLocation::from(ret);
+                        (k_n, v)
                     })
                     .collect::<HashMap<SourceLocation, Vec<TracerData>>>();
 
@@ -367,12 +386,11 @@ fn open_symbols_file(test: &Path) -> io::Result<File> {
 }
 
 pub fn generate_tracemap(
-    project: &Workspace,
     test: &Path,
     analysis: &HashMap<PathBuf, LineAnalysis>,
     config: &Config,
 ) -> io::Result<TraceMap> {
-    let manifest = project.root();
+    let manifest = config.root();
     let file = open_symbols_file(test)?;
     let file = unsafe { MmapOptions::new().map(&file)? };
     if let Ok(obj) = OFile::parse(&*file) {
@@ -381,7 +399,7 @@ pub fn generate_tracemap(
         } else {
             RunTimeEndian::Big
         };
-        if let Ok(result) = get_line_addresses(endian, manifest, &obj, &analysis, config) {
+        if let Ok(result) = get_line_addresses(endian, &manifest, &obj, &analysis, config) {
             Ok(result)
         } else {
             Err(io::Error::new(
