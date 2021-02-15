@@ -1,5 +1,5 @@
 use crate::utils::get_test_path;
-use cargo_tarpaulin::config::{types::*, Config};
+use cargo_tarpaulin::config::{types::RunType, Config};
 use cargo_tarpaulin::launch_tarpaulin;
 use std::env;
 use std::time::Duration;
@@ -13,10 +13,10 @@ fn only_test_coverage() {
     let restore_dir = env::current_dir().unwrap();
     let test_dir = get_test_path("all_test_types");
     env::set_current_dir(&test_dir).unwrap();
-    config.manifest = test_dir.clone();
+    config.manifest = test_dir;
     config.manifest.push("Cargo.toml");
 
-    let (res, ret) = launch_tarpaulin(&config).unwrap();
+    let (res, ret) = launch_tarpaulin(&config, &None).unwrap();
     assert_eq!(ret, 0);
     env::set_current_dir(restore_dir).unwrap();
 
@@ -39,10 +39,10 @@ fn only_example_coverage() {
     let restore_dir = env::current_dir().unwrap();
     let test_dir = get_test_path("all_test_types");
     env::set_current_dir(&test_dir).unwrap();
-    config.manifest = test_dir.clone();
+    config.manifest = test_dir;
     config.manifest.push("Cargo.toml");
 
-    let (res, ret) = launch_tarpaulin(&config).unwrap();
+    let (res, ret) = launch_tarpaulin(&config, &None).unwrap();
     assert_eq!(ret, 0);
     env::set_current_dir(restore_dir).unwrap();
 
@@ -66,10 +66,10 @@ fn only_bench_coverage() {
     let restore_dir = env::current_dir().unwrap();
     let test_dir = get_test_path("all_test_types");
     env::set_current_dir(&test_dir).unwrap();
-    config.manifest = test_dir.clone();
+    config.manifest = test_dir;
     config.manifest.push("Cargo.toml");
 
-    let (res, ret) = launch_tarpaulin(&config).unwrap();
+    let (res, ret) = launch_tarpaulin(&config, &None).unwrap();
     assert_eq!(ret, 0);
     env::set_current_dir(restore_dir).unwrap();
 
@@ -84,7 +84,7 @@ fn only_bench_coverage() {
 }
 
 #[test]
-#[ignore]
+#[cfg(feature = "nightly")]
 fn only_doctest_coverage() {
     let mut config = Config::default();
     config.verbose = true;
@@ -93,10 +93,10 @@ fn only_doctest_coverage() {
     let restore_dir = env::current_dir().unwrap();
     let test_dir = get_test_path("all_test_types");
     env::set_current_dir(&test_dir).unwrap();
-    config.manifest = test_dir.clone();
+    config.manifest = test_dir;
     config.manifest.push("Cargo.toml");
 
-    let (res, ret) = launch_tarpaulin(&config).unwrap();
+    let (res, ret) = launch_tarpaulin(&config, &None).unwrap();
     assert_eq!(ret, 0);
     env::set_current_dir(restore_dir).unwrap();
 

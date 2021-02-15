@@ -1,16 +1,21 @@
 use crate::utils::get_test_path;
-use cargo_tarpaulin::config::{Config, ConfigWrapper, RunType};
+use cargo_tarpaulin::config::{Config, ConfigWrapper, Mode, RunType};
 use cargo_tarpaulin::launch_tarpaulin;
-use cargo_tarpaulin::traces::*;
+use cargo_tarpaulin::traces::TraceMap;
 use clap::App;
 use std::env;
+use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
-mod compile_fail;
+#[cfg(nightly)]
 mod doc_coverage;
+mod failure_thresholds;
+mod failures;
 mod line_coverage;
 mod test_types;
 mod utils;
+mod workspaces;
 
 pub fn check_percentage_with_cli_args(minimum_coverage: f64, has_lines: bool, args: &[String]) {
     let restore_dir = env::current_dir().unwrap();
@@ -26,7 +31,7 @@ pub fn check_percentage_with_cli_args(minimum_coverage: f64, has_lines: bool, ar
     let configs = ConfigWrapper::from(&matches).0;
     let mut res = TraceMap::new();
     for config in &configs {
-        let (t, _) = launch_tarpaulin(&config).unwrap();
+        let (t, _) = launch_tarpaulin(&config, &None).unwrap();
         res.merge(&t);
     }
     res.dedup();
@@ -55,17 +60,23 @@ pub fn check_percentage_with_config(
     config.manifest = test_dir;
     config.manifest.push("Cargo.toml");
 
-    let (res, _) = launch_tarpaulin(&config).unwrap();
+    // Note to contributors. If an integration test fails, uncomment this to be able to see the
+    // tarpaulin logs
+    //cargo_tarpaulin::setup_logging(true, true);
+
+    let (res, _) = launch_tarpaulin(&config, &None).unwrap();
 
     env::set_current_dir(restore_dir).unwrap();
-    assert!(
-        res.coverage_percentage() >= minimum_coverage,
-        "Assertion failed {} >= {}",
-        res.coverage_percentage(),
-        minimum_coverage
-    );
     if has_lines {
         assert!(res.total_coverable() > 0);
+        assert!(
+            res.coverage_percentage() >= minimum_coverage,
+            "Assertion failed {} >= {}",
+            res.coverage_percentage(),
+            minimum_coverage
+        );
+    } else {
+        assert_eq!(res.total_coverable(), 0);
     }
 }
 
@@ -78,7 +89,7 @@ pub fn check_percentage(project_name: &str, minimum_coverage: f64, has_lines: bo
 fn incorrect_manifest_path() {
     let mut config = Config::default();
     config.manifest.push("__invalid_dir__");
-    let launch = launch_tarpaulin(&config);
+    let launch = launch_tarpaulin(&config, &None);
     assert!(launch.is_err());
 }
 
@@ -88,7 +99,7 @@ fn proc_macro_link() {
     config.test_timeout = Duration::from_secs(60);
     let test_dir = get_test_path("proc_macro");
     config.manifest = test_dir.join("Cargo.toml");
-    assert!(launch_tarpaulin(&config).is_ok());
+    assert!(launch_tarpaulin(&config, &None).is_ok());
 }
 
 #[test]
@@ -186,11 +197,83 @@ fn benchmark_coverage() {
 }
 
 #[test]
+fn cargo_run_coverage() {
+    let mut config = Config::default();
+    config.command = Mode::Build;
+    check_percentage_with_config("run_coverage", 1.0f64, true, config);
+}
+
+#[test]
 fn examples_coverage() {
     let test = "example_test";
     check_percentage(test, 0.0f64, true);
 
     let mut config = Config::default();
     config.run_types = vec![RunType::Examples];
+    check_percentage_with_config(test, 1.0f64, true, config.clone());
+
+    config.run_types.clear();
+    config.example_names.insert("say_hello".to_string());
     check_percentage_with_config(test, 1.0f64, true, config);
+}
+
+#[test]
+fn access_env_var() {
+    // This test is mainly to check that expected environment variables are present
+    // using `CARGO_BIN_EXE_<name>` to test
+    let test = "env_var";
+    check_percentage(test, 1.0f64, true);
+}
+
+#[test]
+fn tarpaulin_attrs() {
+    check_percentage("tarpaulin_attrs", 0.0f64, true);
+}
+
+#[test]
+#[cfg(nightly)]
+fn tarpaulin_tool_attr() {
+    check_percentage("tool_attr", 0.0f64, false);
+}
+
+#[test]
+#[cfg(nightly)]
+fn filter_with_inner_attributes() {
+    check_percentage("filter_inner_modules", 0.0f64, false);
+}
+
+#[test]
+fn cargo_home_filtering() {
+    let new_home =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/HttptestAndReqwest/new_home");
+    let previous = env::var("CARGO_HOME");
+
+    let mut config = Config::default();
+    config.test_timeout = Duration::from_secs(60);
+    let restore_dir = env::current_dir().unwrap();
+    let test_dir = get_test_path("HttptestAndReqwest");
+    env::set_current_dir(&test_dir).unwrap();
+    config.manifest = test_dir;
+    config.manifest.push("Cargo.toml");
+
+    env::set_var("CARGO_HOME", new_home.display().to_string());
+    let run = launch_tarpaulin(&config, &None);
+    match previous {
+        Ok(s) => env::set_var("CARGO_HOME", s),
+        Err(_) => {
+            let _ = Command::new("unset").args(&["CARGO_HOME"]).output();
+        }
+    }
+    let (res, _) = run.unwrap();
+
+    env::set_current_dir(restore_dir).unwrap();
+
+    assert_eq!(res.iter().count(), 1);
+}
+
+#[test]
+fn follow_exes_down() {
+    let mut config = Config::default();
+    config.follow_exec = true;
+    check_percentage_with_config("follow_exe", 1.0f64, true, config);
 }

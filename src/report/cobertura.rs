@@ -100,34 +100,34 @@ impl Report {
         let mut line_rate = 0.0;
         let mut branch_rate = 0.0;
 
-        if packages.len() > 0 {
+        if !packages.is_empty() {
             line_rate = packages.iter().map(|x| x.line_rate).sum::<f64>() / packages.len() as f64;
             branch_rate =
                 packages.iter().map(|x| x.branch_rate).sum::<f64>() / packages.len() as f64;
         }
 
         Ok(Report {
-            timestamp: timestamp,
+            timestamp,
             lines_covered: traces.total_covered(),
             lines_valid: traces.total_coverable(),
-            line_rate: line_rate,
+            line_rate,
             branches_covered: 0,
             branches_valid: 0,
-            branch_rate: branch_rate,
-            sources: sources,
-            packages: packages,
+            branch_rate,
+            sources,
+            packages,
         })
     }
 
     pub fn export(&self, config: &Config) -> Result<(), Error> {
-        let file_path = config.output_directory.join("cobertura.xml");
+        let file_path = config.output_dir().join("cobertura.xml");
         let mut file =
             File::create(file_path).map_err(|e| Error::ExportError(quick_xml::Error::Io(e)))?;
 
         let mut writer = Writer::new(Cursor::new(vec![]));
         writer
             .write_event(Event::Decl(BytesDecl::new(b"1.0", None, None)))
-            .map_err(|e| Error::ExportError(e))?;
+            .map_err(Error::ExportError)?;
 
         let cov_tag = b"coverage";
         let mut cov = BytesStart::borrowed(cov_tag, cov_tag.len());
@@ -151,17 +151,17 @@ impl Report {
 
         writer
             .write_event(Event::Start(cov))
-            .map_err(|e| Error::ExportError(e))?;
+            .map_err(Error::ExportError)?;
 
         self.export_header(&mut writer)
-            .map_err(|e| Error::ExportError(e))?;
+            .map_err(Error::ExportError)?;
 
         self.export_packages(&mut writer)
-            .map_err(|e| Error::ExportError(e))?;
+            .map_err(Error::ExportError)?;
 
         writer
             .write_event(Event::End(BytesEnd::borrowed(cov_tag)))
-            .map_err(|e| Error::ExportError(e))?;
+            .map_err(Error::ExportError)?;
 
         let result = writer.into_inner().into_inner();
         file.write_all(&result)
@@ -314,8 +314,8 @@ fn render_package(config: &Config, traces: &TraceMap, pkg: &Path) -> Package {
     let line_rate = line_cover / (traces.coverable_in_path(pkg) as f64);
 
     Package {
-        name: name,
-        line_rate: line_rate,
+        name,
+        line_rate,
         branch_rate: 0.0,
         complexity: 0.0,
         classes: render_classes(config, traces, pkg),
@@ -338,7 +338,7 @@ fn render_classes(config: &Config, traces: &TraceMap, pkg: &Path) -> Vec<Class> 
         .files()
         .iter()
         .filter(|x| x.parent() == Some(pkg))
-        .map(|x| render_class(config, traces, x))
+        .filter_map(|x| render_class(config, traces, x))
         .collect()
 }
 
@@ -350,7 +350,7 @@ fn render_classes(config: &Config, traces: &TraceMap, pkg: &Path) -> Vec<Class> 
 // Until this is fixed, the render_method function will panic if called, as it
 // cannot be properly implemented.
 //
-fn render_class(config: &Config, traces: &TraceMap, file: &Path) -> Class {
+fn render_class(config: &Config, traces: &TraceMap, file: &Path) -> Option<Class> {
     let name = file
         .file_stem()
         .map(|x| x.to_str().unwrap())
@@ -358,23 +358,27 @@ fn render_class(config: &Config, traces: &TraceMap, file: &Path) -> Class {
         .to_string();
 
     let file_name = config.strip_base_dir(file).to_str().unwrap().to_string();
+    let coverable = traces.coverable_in_path(file);
+    if coverable == 0 {
+        None
+    } else {
+        let covered = traces.covered_in_path(file) as f64;
+        let line_rate = covered / coverable as f64;
+        let lines = traces
+            .get_child_traces(file)
+            .iter()
+            .map(|x| render_line(x))
+            .collect();
 
-    let covered = traces.covered_in_path(file) as f64;
-    let line_rate = covered / traces.coverable_in_path(file) as f64;
-    let lines = traces
-        .get_child_traces(file)
-        .iter()
-        .map(|x| render_line(x))
-        .collect();
-
-    Class {
-        name: name,
-        file_name: file_name,
-        line_rate: line_rate,
-        branch_rate: 0.0,
-        complexity: 0.0,
-        lines: lines,
-        methods: vec![],
+        Some(Class {
+            name,
+            file_name,
+            line_rate,
+            branch_rate: 0.0,
+            complexity: 0.0,
+            lines,
+            methods: vec![],
+        })
     }
 }
 

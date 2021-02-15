@@ -58,11 +58,11 @@ fn get_json(coverage_data: &TraceMap, context: Context) -> Result<String, RunErr
     }
 
     safe_json::to_string_safe(&report)
-        .map_err(|e| RunError::Html(format!("Report isn't serializable: {}", e.to_string())))
+        .map_err(|e| RunError::Html(format!("Report isn't serializable: {}", e)))
 }
 
 pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError> {
-    let file_path = config.output_directory.join("tarpaulin-report.html");
+    let file_path = config.output_dir().join("tarpaulin-report.html");
     let mut file = match File::create(file_path) {
         Ok(k) => k,
         Err(e) => {
@@ -79,7 +79,7 @@ pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError>
         None => String::from("null"),
     };
 
-    let html_write = match write!(
+    match write!(
         file,
         r##"<!doctype html>
 <html>
@@ -93,19 +93,21 @@ pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError>
         var data = {};
         var previousData = {};
     </script>
-    <script crossorigin src="https://unpkg.com/react@16/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@16/umd/react-dom.production.min.js"></script>
+    <script crossorigin>{}</script>
+    <script crossorigin>{}</script>
     <script>{}</script>
 </body>
 </html>"##,
         include_str!("report_viewer.css"),
         report_json,
         previous_report_json,
-        include_str!("report_viewer.js")
+        include_str!("react.production.min.js"),
+        include_str!("react-dom.production.min.js"),
+        include_str!("report_viewer.js"),
     ) {
         Ok(_) => (),
         Err(e) => return Err(RunError::Html(e.to_string())),
     };
 
-    Ok(html_write)
+    Ok(())
 }

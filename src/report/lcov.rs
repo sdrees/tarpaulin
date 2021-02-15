@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Write;
 
 pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError> {
-    let file_path = config.output_directory.join("lcov.info");
+    let file_path = config.output_dir().join("lcov.info");
     let mut file = match File::create(file_path) {
         Ok(k) => k,
         Err(e) => {
@@ -17,6 +17,9 @@ pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError>
     };
 
     for (path, traces) in coverage_data.iter() {
+        if traces.is_empty() {
+            continue;
+        }
         writeln!(file, "TN:")?;
         writeln!(file, "SF:{}", path.to_str().unwrap())?;
 
@@ -40,10 +43,9 @@ pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError>
                 fnda.push(format!("FNDA:{},{}", fn_hits, fn_name));
             }
 
-            match trace.stats {
-                CoverageStat::Line(hits) => da.push((trace.line, hits)),
-                _ => (),
-            };
+            if let CoverageStat::Line(hits) = trace.stats {
+                da.push((trace.line, hits))
+            }
         }
 
         for fn_line in fns.iter() {

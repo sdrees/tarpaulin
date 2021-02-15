@@ -3,10 +3,197 @@
 From 2019 onwards, all notable changes to tarpaulin will be documented in this
 file.
 
-## [Unreleased]
+## [0.18.0-alpha1] 2021-02-14
+### Added
+- Added `--color` option matching cargo arg
+- `--follow-exec` option making exec tracing non-default
+- `--jobs` option matching the one in cargo test
+
+### Changed
+- Check through memory map for the first entry belonging to the executable [FIX]
+- Pass through the non-zero exit code from cargo (issue #627)
+- Change doctest source resolution to accommodate for binary renaming in nightly
+1.50.0
+- Changed path prefix in doctests to go from workspace package root not project root
+- Added source location to debug event logs
+- Improve error message for building tests to include target name that failed
+- Hidden file filtering only applied for folders inside project directory not
+any folder on path. Fixes #682
+- Removed unimplemented `toml` report
+
+### Removed
+
+## [0.17.0] - 2020-11-10 [YANKED]
+### Added
+- Now trace into executed binaries
+- Added `--avoid-cfg-tarpaulin` flag to remove `--cfg=tarpaulin` from the
+`RUSTFLAGS`
+
+### Changed
+- Address offset mapping has been added which allows us to compile binaries
+without changing the relocation model
+- Tie match patterns to a single logical line
+- Check if unable to read file to string and skip source analysis for it if 
+that's the case
+
+### Removed
+
+## [0.16.0] - 2020-11-02
+### Added
+- `--command` option to build and run a binary for testing CLI apps
+
+### Changed
+- Make `--run-types` and `--out` case insensitive
+- Filter executables on command not run type to fix #610
+
+### Removed
+
+## [0.15.0] - 2020-10-17
 ### Added
 
 ### Changed
+- Moved from `log` and `env_logger` to `tracing`
+- Correct field name for `--fail-under` in config file from `fail_under` to 
+`fail-under`
+- Fix process deadlock when compiler diagnostic error or ICE occur
+- Ignore non-project files when checking source locations in DWARF (issue #566)
+
+### Removed
+
+## [0.14.3] - 2020-08-31
+### Added
+- Added `--fail-under` flag to set minimum coverage required for a run
+- Added `--print-rust-flags` and `--print-rustdoc-flags` to print the set of 
+`RUSTFLAGS` and `RUSTDOCFLAGS` that can occur across all configs to aid user 
+debugging
+- Source analysis for group, await, async block, try and try block expressions
+- `#[tarpaulin::skip]` and `#[cfg(not(tarpaulin_include))]` can now work in
+file inner attributes.
+
+### Changed
+- Don't report coverage when not running tests
+- Inline react scripts to HTML to allow rendering on more restrictive security
+policies (issue #534)
+- Check addresses are within .text section
+- Apply line one filtering to all files not just src/main.rs
+
+### Removed
+
+## [0.14.2] - 2020-07-10
+### Added
+- Added `--all-targets` to config file
+
+### Changed
+- Actually pass `--all-targets` to cargo
+- Merge more CLI options with active config (no-run, no-default-features, 
+ignore-panics, forward-signals, run-ignored, release, count, all-features, 
+all-targets, line-coverage, branch-coverage, offline, timeout, features, 
+out, arguments passed to test executable, -Z)
+- Update stats for all traces when they match a single address
+- Correct handling of doc tests in workspaces as doctest name is relative to 
+package root not workspace root
+- Return an error if a doctest fails to compile
+- Include files with no coverable lines in Html report
+- `--ignore-panics` now ignores `assert_*` and `debug_assert*` macros
+
+### Removed
+
+## [0.14.1] - 2020-07-01
+### Added
+- run-types for lib, bins and all-targets
+- `--tests` `--lib`, `--examples, `--bins`, `--doc`, `--benches`, 
+`--all-targets` flags matching `cargo test`
+- Add named test running and flags `--test`, `--example`, `--bin`, `--bench`
+- Equivalent options for `--no-fail-fast` and `--profile`
+- Filtering of `CARGO_HOME` contents when it exists in project directory
+- `--debug` or `--dump-traces` now outputs a json log format that can be used 
+to plot tarpaulin execution
+
+### Changed
+- Now merge run-types in configs
+
+### Removed
+
+## [0.14.0] - 2020-06-25
+### Added
+- Filtering for `cfg(not(tarpaulin_include))` also adding `--cfg=tarpaulin` to default config
+- Support for tool attribute `#[tarpaulin::skip]`
+
+### Changed
+
+### Removed
+
+# [0.13.4] - 2020-06-23 [YANKED]
+### Added
+- Add `--cfg=tarpaulin` to `RUSTFLAGS` this allows users to use
+`#[cfg(tarpaulin)]` and `#[cfg(not(tarpaulin))]`
+
+### Changed
+- Don't run executables when `--no-run` provided
+- `#[cfg(not(tarpaulin))]` blocks are ignored in source analysis
+
+### Removed 
+
+## [0.13.3] - 2020-06-06
+### Added
+
+### Changed
+- Fix issue where doc tests could hang if stdout buffer filled (#402)
+- No longer report test failure if a `should_panic` doc test is ran
+- Clean pre-existing doc tests from target/doctests directory
+- Always print stderr output from cargo when building project
+
+### Removed
+
+## [0.13.2] - 2020-05-25
+### Added
+
+### Changed
+- Make features argument optional again
+
+### Removed
+
+## [0.13.1] - 2020-05-25
+### Added
+
+### Changed
+- `frozen`, `locked`, `force-clean` and `ignore-tests` flags are now propagated
+to feature configurations.
+- `exclude` argument for packages is now propagated and any features existing
+in the `package` list are removed to avoid conflicts
+- Fixed regression where features weren't propagated
+
+### Removed
+
+## [0.13.0] - 2020-05-25
+### Added
+- Compilation target is now accepted through the `--target` parameter.
+
+### Changed
+- Examples coverage now runs the tests that would be ran with `cargo test --examples`
+- Look up previous report from correct target directory.
+- Added doc comments to ignorable lines in source analysis
+- Feature configurations in `tarpaulin.toml` are now run in order of declaration.
+- Compilation failure results in `cargo tarpaulin` execution failure.
+- `workspace` flag is correctly propagated to feature configurations.
+- `features` now takes in a string e.g. `"f1 f2"`, instead of an array of strings `["f1", "f2"]`.
+- `packages` and `exclude` in workspace configurations are now read.
+
+### Removed
+
+## [0.12.4] - 2020-05-10
+### Added
+
+- The `CARGO_TARPAULIN_TARGET_DIR` environment variable may be used to set the
+  default target directory for tarpaulin artifacts. The command line argument
+  has precedence.
+
+### Changed
+- Find target folder from metadata if not provided and place reports there (fixes running from packages inside workspaces)
+- Using date-locked toolchains no longer defaults to trying to use a toolchain with the channel name and no date
+- The following CLI options now take effect even when a custom config file is
+  in place: `output-dir`, `target-dir`, `root`, `coveralls`, `ciserver`,
+  `report-uri`.
 
 ### Removed
 

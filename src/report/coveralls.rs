@@ -2,10 +2,10 @@ use crate::config::Config;
 use crate::errors::RunError;
 use crate::traces::{CoverageStat, TraceMap};
 use coveralls_api::*;
-use log::{info, trace, warn};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use tracing::{info, trace, warn};
 
 fn get_git_info(manifest_path: &Path) -> Result<GitInfo, String> {
     let dir_path = manifest_path
@@ -98,8 +98,10 @@ pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError>
                     }
                 }
             }
-            if let Ok(source) = Source::new(&rel_path, file, &lines, &None, false) {
-                report.add_source(source);
+            if !lines.is_empty() {
+                if let Ok(source) = Source::new(&rel_path, file, &lines, &None, false) {
+                    report.add_source(source);
+                }
             }
         }
 
@@ -124,7 +126,7 @@ pub fn export(coverage_data: &TraceMap, config: &Config) -> Result<(), RunError>
         if config.debug {
             if let Ok(text) = serde_json::to_string(&report) {
                 info!("Attempting to write coveralls report to coveralls.json");
-                let file_path = config.output_directory.join("coveralls.json");
+                let file_path = config.output_dir().join("coveralls.json");
                 let _ = fs::write(file_path, text);
             } else {
                 warn!("Failed to serialise coverage report");

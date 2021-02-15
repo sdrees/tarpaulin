@@ -2,19 +2,20 @@ pub use self::types::*;
 
 use self::parse::*;
 use cargo_metadata::{Metadata, MetadataCommand, Package};
-use clap::ArgMatches;
+use clap::{value_t, ArgMatches};
 use coveralls_api::CiService;
 use humantime_serde::deserialize as humantime_serde;
-use log::{error, info, warn};
+use indexmap::IndexMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::{error, info, warn};
 
 mod parse;
 pub mod types;
@@ -32,7 +33,7 @@ pub struct Config {
     /// Path to a tarpaulin.toml config file
     pub config: Option<PathBuf>,
     /// Path to the projects cargo manifest
-    pub root: Option<String>,
+    root: Option<PathBuf>,
     /// Flag to also run tests with the ignored attribute
     #[serde(rename = "ignored")]
     pub run_ignored: bool,
@@ -45,10 +46,15 @@ pub struct Config {
     /// Flag to add a clean step when preparing the target project
     #[serde(rename = "force-clean")]
     pub force_clean: bool,
+    #[serde(rename = "all-targets")]
+    pub all_targets: bool,
     /// Verbose flag for printing information to the user
     pub verbose: bool,
     /// Debug flag for printing internal debugging information to the user
     pub debug: bool,
+    /// Enable the event logger
+    #[serde(rename = "dump-traces")]
+    pub dump_traces: bool,
     /// Flag to count hits in coverage
     pub count: bool,
     /// Flag specifying to run line coverage (default)
@@ -59,7 +65,7 @@ pub struct Config {
     pub branch_coverage: bool,
     /// Directory to write output files
     #[serde(rename = "output-dir")]
-    pub output_directory: PathBuf,
+    pub output_directory: Option<PathBuf>,
     /// Key relating to coveralls service or repo
     pub coveralls: Option<String>,
     /// Enum representing CI tool used.
@@ -95,11 +101,15 @@ pub struct Config {
     pub locked: bool,
     /// Don't update `Cargo.lock` or any caches.
     pub frozen: bool,
+    /// Build for the target triple.
+    pub target: Option<String>,
     /// Directory for generated artifacts
     #[serde(rename = "target-dir")]
-    pub target_dir: Option<PathBuf>,
+    target_dir: Option<PathBuf>,
     /// Run tarpaulin on project without accessing the network
     pub offline: bool,
+    /// Cargo subcommand to run. So far only test and build are supported
+    pub command: Mode,
     /// Types of tests for tarpaulin to collect coverage on
     #[serde(rename = "run-types")]
     pub run_types: Vec<RunType>,
@@ -116,32 +126,69 @@ pub struct Config {
     /// Varargs to be forwarded to the test executables.
     #[serde(rename = "args")]
     pub varargs: Vec<String>,
-    /// Features to include in the target project build
-    pub features: Vec<String>,
+    /// Features to include in the target project build, e.g. "feature1 feature2"
+    pub features: Option<String>,
     /// Unstable cargo features to use
     #[serde(rename = "Z")]
     pub unstable_features: Vec<String>,
     /// Output files to generate
     #[serde(rename = "out")]
     pub generate: Vec<OutputFile>,
+    /// Names of tests to run corresponding to `cargo --test <NAME>...`
+    #[serde(rename = "test")]
+    pub test_names: HashSet<String>,
+    /// Names of binaries to run corresponding to `cargo --bin <NAME>...`
+    #[serde(rename = "bin")]
+    pub bin_names: HashSet<String>,
+    /// Names of examples to run corresponding to `cargo --example <NAME>...`
+    #[serde(rename = "example")]
+    pub example_names: HashSet<String>,
+    /// Names of benches to run corresponding to `cargo --bench <NAME>...`
+    #[serde(rename = "bench")]
+    pub bench_names: HashSet<String>,
+    /// Whether to carry on or stop when a test failure occurs
+    #[serde(rename = "no-fail-fast")]
+    pub no_fail_fast: bool,
+    /// Run with the given profile
+    pub profile: Option<String>,
+    /// returns a non-zero code if coverage is below the threshold
+    #[serde(rename = "fail-under")]
+    pub fail_under: Option<f64>,
+    /// Result of cargo_metadata ran on the crate
     #[serde(skip_deserializing, skip_serializing)]
     pub metadata: RefCell<Option<Metadata>>,
+    /// Don't pass --cfg=tarpaulin to the 'RUSTFLAG'
+    pub avoid_cfg_tarpaulin: bool,
+    /// Colouring of logging
+    pub color: Color,
+    /// Follow traced executables down
+    pub follow_exec: bool,
+    /// Number of jobs used for building the tests
+    pub jobs: Option<usize>,
+}
+
+fn default_test_timeout() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl Default for Config {
     fn default() -> Config {
         Config {
             name: String::new(),
-            run_types: vec![RunType::Tests],
+            command: Mode::Test,
+            run_types: vec![],
             manifest: default_manifest(),
             config: None,
             root: Default::default(),
             run_ignored: false,
+            all_targets: false,
             ignore_tests: false,
             ignore_panics: false,
             force_clean: false,
             verbose: false,
             debug: false,
+            follow_exec: false,
+            dump_traces: false,
             count: false,
             line_coverage: true,
             branch_coverage: false,
@@ -152,7 +199,7 @@ impl Default for Config {
             report_uri: None,
             forward_signals: false,
             no_default_features: false,
-            features: vec![],
+            features: None,
             unstable_features: vec![],
             all: false,
             packages: vec![],
@@ -160,15 +207,26 @@ impl Default for Config {
             excluded_files: RefCell::new(vec![]),
             excluded_files_raw: vec![],
             varargs: vec![],
-            test_timeout: Duration::from_secs(60),
+            test_timeout: default_test_timeout(),
             release: false,
             all_features: false,
             no_run: false,
             locked: false,
             frozen: false,
+            target: None,
             target_dir: None,
             offline: false,
+            test_names: HashSet::new(),
+            example_names: HashSet::new(),
+            bin_names: HashSet::new(),
+            bench_names: HashSet::new(),
+            no_fail_fast: false,
+            profile: None,
+            fail_under: None,
             metadata: RefCell::new(None),
+            avoid_cfg_tarpaulin: false,
+            jobs: None,
+            color: Color::Auto,
         }
     }
 }
@@ -177,22 +235,35 @@ impl<'a> From<&'a ArgMatches<'a>> for ConfigWrapper {
     fn from(args: &'a ArgMatches<'a>) -> Self {
         info!("Creating config");
         let debug = args.is_present("debug");
+        let dump_traces = debug || args.is_present("dump-traces");
         let verbose = args.is_present("verbose") || debug;
         let excluded_files = get_excluded(args);
         let excluded_files_raw = get_list(args, "exclude-files");
+        let features = get_list(args, "features");
+        let features = if features.is_empty() {
+            None
+        } else {
+            Some(features.join(" "))
+        };
 
         let args_config = Config {
             name: String::new(),
             manifest: get_manifest(args),
             config: None,
             root: get_root(args),
+            command: value_t!(args.value_of("command"), Mode).unwrap_or(Mode::Test),
+            color: value_t!(args.value_of("color"), Color).unwrap_or(Color::Auto),
             run_types: get_run_types(args),
             run_ignored: args.is_present("ignored"),
             ignore_tests: args.is_present("ignore-tests"),
             ignore_panics: args.is_present("ignore-panics"),
             force_clean: args.is_present("force-clean"),
+            no_fail_fast: args.is_present("no-fail-fast"),
+            all_targets: args.is_present("all-targets"),
+            follow_exec: args.is_present("follow-exec"),
             verbose,
             debug,
+            dump_traces,
             count: args.is_present("count"),
             line_coverage: get_line_cov(args),
             branch_coverage: get_branch_cov(args),
@@ -204,22 +275,31 @@ impl<'a> From<&'a ArgMatches<'a>> for ConfigWrapper {
             forward_signals: args.is_present("forward"),
             all_features: args.is_present("all-features"),
             no_default_features: args.is_present("no-default-features"),
-            features: get_list(args, "features"),
+            features,
             unstable_features: get_list(args, "Z"),
             all: args.is_present("all") | args.is_present("workspace"),
             packages: get_list(args, "packages"),
             exclude: get_list(args, "exclude"),
-            excluded_files: RefCell::new(excluded_files.clone()),
-            excluded_files_raw: excluded_files_raw.clone(),
+            excluded_files: RefCell::new(excluded_files),
+            excluded_files_raw,
             varargs: get_list(args, "args"),
             test_timeout: get_timeout(args),
             release: args.is_present("release"),
             no_run: args.is_present("no-run"),
             locked: args.is_present("locked"),
             frozen: args.is_present("frozen"),
+            target: get_target(args),
             target_dir: get_target_dir(args),
             offline: args.is_present("offline"),
+            test_names: get_list(args, "test").iter().cloned().collect(),
+            bin_names: get_list(args, "bin").iter().cloned().collect(),
+            bench_names: get_list(args, "bench").iter().cloned().collect(),
+            example_names: get_list(args, "example").iter().cloned().collect(),
+            fail_under: value_t!(args.value_of("fail-under"), f64).ok(),
+            jobs: value_t!(args.value_of("jobs"), usize).ok(),
+            profile: get_profile(args),
             metadata: RefCell::new(None),
+            avoid_cfg_tarpaulin: args.is_present("avoid-cfg-tarpaulin"),
         };
         if args.is_present("ignore-config") {
             Self(vec![args_config])
@@ -234,18 +314,38 @@ impl<'a> From<&'a ArgMatches<'a>> for ConfigWrapper {
             }
             let confs = Config::load_config_file(&path);
             Config::get_config_vec(confs, args_config)
+        } else if let Some(cfg) = args_config.check_for_configs() {
+            let confs = Config::load_config_file(&cfg);
+            Config::get_config_vec(confs, args_config)
         } else {
-            if let Some(cfg) = args_config.check_for_configs() {
-                let confs = Config::load_config_file(&cfg);
-                Config::get_config_vec(confs, args_config)
-            } else {
-                Self(vec![args_config])
-            }
+            Self(vec![args_config])
         }
     }
 }
 
 impl Config {
+    pub fn target_dir(&self) -> PathBuf {
+        if let Some(s) = &self.target_dir {
+            s.clone()
+        } else {
+            match *self.get_metadata() {
+                Some(ref meta) => meta.target_directory.clone(),
+                _ => self
+                    .manifest
+                    .parent()
+                    .map(|x| x.to_path_buf())
+                    .unwrap_or_default()
+                    .join("target"),
+            }
+        }
+    }
+
+    pub fn doctest_dir(&self) -> PathBuf {
+        let mut result = self.target_dir();
+        result.push("doctests");
+        result
+    }
+
     fn get_metadata(&self) -> Ref<Option<Metadata>> {
         if self.metadata.borrow().is_none() {
             match MetadataCommand::new().manifest_path(&self.manifest).exec() {
@@ -275,12 +375,16 @@ impl Config {
         }
     }
 
-    pub fn get_config_vec(file_configs: std::io::Result<Vec<Self>>, backup: Self) -> ConfigWrapper {
-        if file_configs.is_err() {
-            warn!("Failed to deserialize config file falling back to provided args");
-            ConfigWrapper(vec![backup])
+    pub fn output_dir(&self) -> PathBuf {
+        if let Some(ref path) = self.output_directory {
+            path.clone()
         } else {
-            let mut confs = file_configs.unwrap();
+            env::current_dir().unwrap()
+        }
+    }
+
+    pub fn get_config_vec(file_configs: std::io::Result<Vec<Self>>, backup: Self) -> ConfigWrapper {
+        if let Ok(mut confs) = file_configs {
             for c in confs.iter_mut() {
                 c.merge(&backup);
             }
@@ -289,6 +393,9 @@ impl Config {
             } else {
                 ConfigWrapper(confs)
             }
+        } else {
+            warn!("Failed to deserialize config file falling back to provided args");
+            ConfigWrapper(vec![backup])
         }
     }
 
@@ -296,12 +403,10 @@ impl Config {
     pub fn check_for_configs(&self) -> Option<PathBuf> {
         if let Some(root) = &self.root {
             Self::check_path_for_configs(&root)
+        } else if let Some(root) = self.manifest.clone().parent() {
+            Self::check_path_for_configs(&root)
         } else {
-            if let Some(root) = self.manifest.clone().parent() {
-                Self::check_path_for_configs(&root)
-            } else {
-                None
-            }
+            None
         }
     }
 
@@ -324,16 +429,30 @@ impl Config {
         let mut buffer = Vec::new();
         f.read_to_end(&mut buffer)?;
         let mut res = Self::parse_config_toml(&buffer);
+        let parent = match file.as_ref().parent() {
+            Some(p) => p.to_path_buf(),
+            None => PathBuf::new(),
+        };
         if let Ok(cfs) = res.as_mut() {
             for mut c in cfs.iter_mut() {
                 c.config = Some(file.as_ref().to_path_buf());
+                c.manifest = make_absolute_with_parent(&c.manifest, &parent);
+                if let Some(root) = c.root.as_mut() {
+                    *root = make_absolute_with_parent(&root, &parent);
+                }
+                if let Some(root) = c.output_directory.as_mut() {
+                    *root = make_absolute_with_parent(&root, &parent);
+                }
+                if let Some(root) = c.target_dir.as_mut() {
+                    *root = make_absolute_with_parent(&root, &parent);
+                }
             }
         }
         res
     }
 
     pub fn parse_config_toml(buffer: &[u8]) -> std::io::Result<Vec<Self>> {
-        let mut map: HashMap<String, Self> = toml::from_slice(&buffer).map_err(|e| {
+        let mut map: IndexMap<String, Self> = toml::from_slice(&buffer).map_err(|e| {
             error!("Invalid config file {}", e);
             Error::new(ErrorKind::InvalidData, format!("{}", e))
         })?;
@@ -359,8 +478,129 @@ impl Config {
         } else if other.verbose {
             self.verbose = other.verbose;
         }
-        self.manifest = other.manifest.clone();
-        self.root = other.root.clone();
+        self.no_run |= other.no_run;
+        self.no_default_features |= other.no_default_features;
+        self.ignore_panics |= other.ignore_panics;
+        self.forward_signals |= other.forward_signals;
+        self.run_ignored |= other.run_ignored;
+        self.release |= other.release;
+        self.count |= other.count;
+        self.all_features |= other.all_features;
+        self.all_targets |= other.all_targets;
+        self.line_coverage |= other.line_coverage;
+        self.branch_coverage |= other.branch_coverage;
+        self.dump_traces |= other.dump_traces;
+        self.offline |= other.offline;
+        if self.manifest != other.manifest && self.manifest == default_manifest() {
+            self.manifest = other.manifest.clone();
+        }
+        self.root = Config::pick_optional_config(&self.root, &other.root);
+        self.coveralls = Config::pick_optional_config(&self.coveralls, &other.coveralls);
+        self.ci_tool = Config::pick_optional_config(&self.ci_tool, &other.ci_tool);
+        self.report_uri = Config::pick_optional_config(&self.report_uri, &other.report_uri);
+        self.target = Config::pick_optional_config(&self.target, &other.target);
+        self.target_dir = Config::pick_optional_config(&self.target_dir, &other.target_dir);
+        self.output_directory =
+            Config::pick_optional_config(&self.output_directory, &other.output_directory);
+        self.all |= other.all;
+        self.frozen |= other.frozen;
+        self.locked |= other.locked;
+        self.force_clean |= other.force_clean;
+        self.ignore_tests |= other.ignore_tests;
+        self.no_fail_fast |= other.no_fail_fast;
+
+        if self.jobs.is_none() {
+            self.jobs = other.jobs;
+        }
+        if self.fail_under.is_none()
+            || other.fail_under.is_some() && other.fail_under.unwrap() < self.fail_under.unwrap()
+        {
+            self.fail_under = other.fail_under;
+        }
+
+        if other.test_timeout != default_test_timeout() {
+            self.test_timeout = other.test_timeout;
+        }
+
+        if self.profile.is_none() && other.profile.is_some() {
+            self.profile = other.profile.clone();
+        }
+        if other.features.is_some() {
+            if self.features.is_none() {
+                self.features = other.features.clone();
+            } else if let Some(features) = self.features.as_mut() {
+                features.push(' ');
+                features.push_str(other.features.as_ref().unwrap());
+            }
+        }
+
+        let additional_packages = other
+            .packages
+            .iter()
+            .filter(|package| !self.packages.contains(package))
+            .cloned()
+            .collect::<Vec<String>>();
+        self.packages.extend(additional_packages);
+
+        let additional_outs = other
+            .generate
+            .iter()
+            .filter(|out| !self.generate.contains(out))
+            .copied()
+            .collect::<Vec<_>>();
+        self.generate.extend(additional_outs);
+
+        let additional_excludes = other
+            .exclude
+            .iter()
+            .filter(|package| !self.exclude.contains(package))
+            .cloned()
+            .collect::<Vec<String>>();
+        self.exclude.extend(additional_excludes);
+
+        let additional_varargs = other
+            .varargs
+            .iter()
+            .filter(|package| !self.varargs.contains(package))
+            .cloned()
+            .collect::<Vec<String>>();
+        self.varargs.extend(additional_varargs);
+
+        let additional_z_opts = other
+            .unstable_features
+            .iter()
+            .filter(|package| !self.unstable_features.contains(package))
+            .cloned()
+            .collect::<Vec<String>>();
+        self.unstable_features.extend(additional_z_opts);
+
+        let exclude = &self.exclude;
+        self.packages.retain(|package| {
+            let keep = !exclude.contains(package);
+            if !keep {
+                info!("{} is in exclude list removing from packages", package);
+            }
+            keep
+        });
+
+        for test in &other.test_names {
+            self.test_names.insert(test.clone());
+        }
+        for test in &other.bin_names {
+            self.bin_names.insert(test.clone());
+        }
+        for test in &other.example_names {
+            self.example_names.insert(test.clone());
+        }
+        for test in &other.bench_names {
+            self.bench_names.insert(test.clone());
+        }
+        for ty in &other.run_types {
+            if !self.run_types.contains(ty) {
+                self.run_types.push(*ty);
+            }
+        }
+
         if !other.excluded_files_raw.is_empty() {
             self.excluded_files_raw
                 .extend_from_slice(&other.excluded_files_raw);
@@ -369,6 +609,24 @@ impl Config {
             let mut excluded_files = self.excluded_files.borrow_mut();
             excluded_files.clear();
         }
+    }
+
+    pub fn pick_optional_config<T: Clone>(
+        base_config: &Option<T>,
+        override_config: &Option<T>,
+    ) -> Option<T> {
+        if override_config.is_some() {
+            override_config.clone()
+        } else {
+            base_config.clone()
+        }
+    }
+
+    pub fn has_named_tests(&self) -> bool {
+        !(self.test_names.is_empty()
+            && self.bin_names.is_empty()
+            && self.example_names.is_empty()
+            && self.bench_names.is_empty())
     }
 
     #[inline]
@@ -419,7 +677,16 @@ impl Config {
 
     #[inline]
     pub fn is_default_output_dir(&self) -> bool {
-        self.output_directory == env::current_dir().unwrap()
+        self.output_directory.is_none()
+    }
+}
+
+fn make_absolute_with_parent(path: impl AsRef<Path>, parent: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    if path.is_relative() {
+        parent.as_ref().join(path)
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -427,7 +694,7 @@ impl Config {
 /// Credit to brson from this commit from 2015
 /// https://github.com/rust-lang/rust/pull/23283/files
 ///
-fn path_relative_from(path: &Path, base: &Path) -> Option<PathBuf> {
+pub fn path_relative_from(path: &Path, base: &Path) -> Option<PathBuf> {
     use std::path::Component;
 
     if path.is_absolute() != base.is_absolute() {
@@ -472,6 +739,38 @@ fn path_relative_from(path: &Path, base: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use clap::App;
+
+    #[test]
+    fn features_args() {
+        let matches = App::new("tarpaulin")
+            .args_from_usage(
+                "--features [FEATURES]... 'Features to be included in the target project'
+                             --ignore-config 'Ignore any project config files'",
+            )
+            .get_matches_from_safe(vec![
+                "tarpaulin",
+                "--ignore-config",
+                "--features",
+                "a",
+                "--features",
+                "b",
+            ])
+            .unwrap();
+        let conf = ConfigWrapper::from(&matches).0;
+        assert_eq!(conf.len(), 1);
+        assert_eq!(conf[0].features, Some("a b".to_string()));
+
+        let matches = App::new("tarpaulin")
+            .args_from_usage(
+                "--features [FEATURES]... 'Features to be included in the target project'
+                             --ignore-config 'Ignore any project config files'",
+            )
+            .get_matches_from_safe(vec!["tarpaulin", "--ignore-config", "--features", "a b"])
+            .unwrap();
+        let conf = ConfigWrapper::from(&matches).0;
+        assert_eq!(conf.len(), 1);
+        assert_eq!(conf[0].features, Some("a b".to_string()))
+    }
 
     #[test]
     fn exclude_paths() {
@@ -580,13 +879,162 @@ mod tests {
         let mut configs = Config::parse_config_toml(toml.as_bytes()).unwrap();
         let mut config = configs.remove(0);
         config.merge(&configs[0]);
-        println!("{:?}", configs[0].excluded_files_raw);
-        println!("{:?}", config.excluded_files_raw);
         assert!(config.excluded_files_raw.contains(&"target/*".to_string()));
         assert!(config.excluded_files_raw.contains(&"foo.rs".to_string()));
 
         assert_eq!(config.excluded_files_raw.len(), 2);
         assert_eq!(configs[0].excluded_files_raw.len(), 1);
+    }
+
+    #[test]
+    fn target_merge() {
+        let toml_a = r#""#;
+        let toml_b = r#"target = "wasm32-unknown-unknown""#;
+        let toml_c = r#"target = "x86_64-linux-gnu""#;
+
+        let mut a: Config = toml::from_slice(toml_a.as_bytes()).unwrap();
+        let mut b: Config = toml::from_slice(toml_b.as_bytes()).unwrap();
+        let c: Config = toml::from_slice(toml_c.as_bytes()).unwrap();
+
+        assert_eq!(a.target, None);
+        assert_eq!(b.target, Some(String::from("wasm32-unknown-unknown")));
+        assert_eq!(c.target, Some(String::from("x86_64-linux-gnu")));
+
+        b.merge(&c);
+        assert_eq!(b.target, Some(String::from("x86_64-linux-gnu")));
+
+        a.merge(&b);
+        assert_eq!(a.target, Some(String::from("x86_64-linux-gnu")));
+    }
+
+    #[test]
+    fn workspace_merge() {
+        let toml_a = r#"workspace = false"#;
+        let toml_b = r#"workspace = true"#;
+
+        let mut a: Config = toml::from_slice(toml_a.as_bytes()).unwrap();
+        let b: Config = toml::from_slice(toml_b.as_bytes()).unwrap();
+
+        assert_eq!(a.all, false);
+        assert_eq!(b.all, true);
+
+        a.merge(&b);
+        assert_eq!(a.all, true);
+    }
+
+    #[test]
+    fn packages_merge() {
+        let toml_a = r#"packages = []"#;
+        let toml_b = r#"packages = ["a"]"#;
+        let toml_c = r#"packages = ["b", "a"]"#;
+
+        let mut a: Config = toml::from_slice(toml_a.as_bytes()).unwrap();
+        let mut b: Config = toml::from_slice(toml_b.as_bytes()).unwrap();
+        let c: Config = toml::from_slice(toml_c.as_bytes()).unwrap();
+
+        assert_eq!(a.packages, Vec::<String>::new());
+        assert_eq!(b.packages, vec![String::from("a")]);
+        assert_eq!(c.packages, vec![String::from("b"), String::from("a")]);
+
+        a.merge(&c);
+        assert_eq!(a.packages, vec![String::from("b"), String::from("a")]);
+
+        b.merge(&c);
+        assert_eq!(b.packages, vec![String::from("a"), String::from("b")]);
+    }
+
+    #[test]
+    fn exclude_packages_merge() {
+        let toml_a = r#"packages = []
+                        exclude = ["a"]"#;
+        let toml_b = r#"packages = ["a"]
+                        exclude = ["b"]"#;
+        let toml_c = r#"packages = ["b", "a"]
+                        exclude = ["c"]"#;
+
+        let mut a: Config = toml::from_slice(toml_a.as_bytes()).unwrap();
+        let mut b: Config = toml::from_slice(toml_b.as_bytes()).unwrap();
+        let c: Config = toml::from_slice(toml_c.as_bytes()).unwrap();
+
+        assert_eq!(a.exclude, vec![String::from("a")]);
+        assert_eq!(b.exclude, vec![String::from("b")]);
+        assert_eq!(c.exclude, vec![String::from("c")]);
+
+        a.merge(&c);
+        assert_eq!(a.packages, vec![String::from("b")]);
+        assert_eq!(a.exclude, vec![String::from("a"), String::from("c")]);
+
+        b.merge(&c);
+        assert_eq!(b.packages, vec![String::from("a")]);
+        assert_eq!(b.exclude, vec![String::from("b"), String::from("c")]);
+    }
+
+    #[test]
+    fn coveralls_merge() {
+        let toml = r#"[a]
+        coveralls = "abcd"
+        report-uri = "https://example.com/report"
+
+        [b]
+        coveralls = "xyz"
+        ciserver = "coveralls-ruby"
+        "#;
+
+        let configs = Config::parse_config_toml(toml.as_bytes()).unwrap();
+        let mut a_config = configs.iter().find(|x| x.name == "a").unwrap().clone();
+        let b_config = configs.iter().find(|x| x.name == "b").unwrap();
+        a_config.merge(b_config);
+        assert_eq!(a_config.coveralls, Some("xyz".to_string()));
+        assert_eq!(
+            a_config.ci_tool,
+            Some(CiService::Other("coveralls-ruby".to_string()))
+        );
+        assert_eq!(
+            a_config.report_uri,
+            Some("https://example.com/report".to_string())
+        );
+    }
+
+    #[test]
+    fn output_dir_merge() {
+        let toml = r#"[has_dir]
+        output-dir = "foo"
+
+        [no_dir]
+        coveralls = "xyz"
+        
+        [other_dir]
+        output-dir = "bar"
+        "#;
+
+        let configs = Config::parse_config_toml(toml.as_bytes()).unwrap();
+        let has_dir = configs
+            .iter()
+            .find(|x| x.name == "has_dir")
+            .unwrap()
+            .clone();
+        let no_dir = configs.iter().find(|x| x.name == "no_dir").unwrap().clone();
+        let other_dir = configs
+            .iter()
+            .find(|x| x.name == "other_dir")
+            .unwrap()
+            .clone();
+
+        let mut merged_into_has_dir = has_dir.clone();
+        merged_into_has_dir.merge(&no_dir);
+        assert_eq!(merged_into_has_dir.output_dir(), PathBuf::from("foo"));
+
+        let mut merged_into_no_dir = no_dir.clone();
+        merged_into_no_dir.merge(&has_dir);
+        assert_eq!(merged_into_no_dir.output_dir(), PathBuf::from("foo"));
+
+        let mut neither_merged_dir = no_dir.clone();
+        neither_merged_dir.merge(&no_dir);
+        assert_eq!(neither_merged_dir.output_dir(), env::current_dir().unwrap());
+
+        let mut both_merged_dir = has_dir;
+        both_merged_dir.merge(&other_dir);
+        assert_eq!(both_merged_dir.output_dir(), PathBuf::from("bar"));
     }
 
     #[test]
@@ -603,7 +1051,7 @@ mod tests {
         coveralls = "hello"
         report-uri = "http://hello.com"
         no-default-features = true
-        features = ["a"]
+        features = "a b"
         all-features = true
         workspace = true
         packages = ["pack_1"]
@@ -614,6 +1062,7 @@ mod tests {
         no-run = true
         locked = true
         frozen = true
+        target = "wasm32-unknown-unknown"
         target-dir = "/tmp"
         offline = true
         Z = ["something-nightly"]
@@ -623,12 +1072,22 @@ mod tests {
         manifest-path = "/home/rust/foo/Cargo.toml"
         ciserver = "travis-ci"
         args = ["--nocapture"]
+        test = ["test1", "test2"]
+        bin = ["bin"]
+        example = ["example"]
+        bench = ["bench"]
+        no-fail-fast = true
+        profile = "Release"
+        dump-traces = true
+        all-targets = true
         "#;
         let mut configs = Config::parse_config_toml(toml.as_bytes()).unwrap();
         assert_eq!(configs.len(), 1);
         let config = configs.remove(0);
         assert!(config.debug);
         assert!(config.verbose);
+        assert!(config.dump_traces);
+        assert!(config.all_targets);
         assert!(config.ignore_panics);
         assert!(config.count);
         assert!(config.run_ignored);
@@ -644,14 +1103,15 @@ mod tests {
         assert!(config.no_run);
         assert!(config.locked);
         assert!(config.frozen);
+        assert_eq!(Some(String::from("wasm32-unknown-unknown")), config.target);
+        assert_eq!(Some(Path::new("/tmp").to_path_buf()), config.target_dir);
         assert!(config.offline);
         assert_eq!(config.test_timeout, Duration::from_secs(5));
         assert_eq!(config.unstable_features.len(), 1);
         assert_eq!(config.unstable_features[0], "something-nightly");
         assert_eq!(config.varargs.len(), 1);
         assert_eq!(config.varargs[0], "--nocapture");
-        assert_eq!(config.features.len(), 1);
-        assert_eq!(config.features[0], "a");
+        assert_eq!(config.features, Some(String::from("a b")));
         assert_eq!(config.excluded_files_raw.len(), 1);
         assert_eq!(config.excluded_files_raw[0], "fuzz/*");
         assert_eq!(config.packages.len(), 1);
@@ -663,7 +1123,14 @@ mod tests {
         assert_eq!(config.run_types.len(), 1);
         assert_eq!(config.run_types[0], RunType::Doctests);
         assert_eq!(config.ci_tool, Some(CiService::Travis));
-        assert_eq!(config.root, Some("/home/rust".to_string()));
+        assert_eq!(config.root, Some("/home/rust".into()));
         assert_eq!(config.manifest, PathBuf::from("/home/rust/foo/Cargo.toml"));
+        assert_eq!(config.profile, Some("Release".to_string()));
+        assert!(config.no_fail_fast);
+        assert!(config.test_names.contains("test1"));
+        assert!(config.test_names.contains("test2"));
+        assert!(config.bin_names.contains("bin"));
+        assert!(config.example_names.contains("example"));
+        assert!(config.bench_names.contains("bench"));
     }
 }

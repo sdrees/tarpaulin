@@ -1,7 +1,6 @@
 use crate::config::types::*;
 use clap::{value_t, values_t, ArgMatches};
 use coveralls_api::CiService;
-use log::error;
 use regex::Regex;
 use serde::de::{self, Deserializer};
 use std::env;
@@ -10,6 +9,7 @@ use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
+use tracing::error;
 
 pub(super) fn get_list(args: &ArgMatches, key: &str) -> Vec<String> {
     args.values_of_lossy(key).unwrap_or_else(Vec::new)
@@ -19,7 +19,7 @@ pub(super) fn get_line_cov(args: &ArgMatches) -> bool {
     let cover_lines = args.is_present("line");
     let cover_branches = args.is_present("branch");
 
-    cover_lines || !(cover_lines || cover_branches)
+    cover_lines || !cover_branches
 }
 
 pub(super) fn get_branch_cov(args: &ArgMatches) -> bool {
@@ -58,29 +58,36 @@ pub(super) fn default_manifest() -> PathBuf {
     manifest.canonicalize().unwrap_or(manifest)
 }
 
-pub(super) fn get_target_dir(args: &ArgMatches) -> Option<PathBuf> {
-    if let Some(path) = args.value_of("target-dir") {
-        let path = PathBuf::from(path);
-        if !path.exists() {
-            let _ = create_dir_all(&path);
-        }
-        let path = if path.is_relative() {
-            env::current_dir()
-                .unwrap()
-                .join(path)
-                .canonicalize()
-                .unwrap()
-        } else {
-            path
-        };
-        Some(path)
-    } else {
-        None
-    }
+pub(super) fn get_target(args: &ArgMatches) -> Option<String> {
+    args.value_of("target").map(String::from)
 }
 
-pub(super) fn get_root(args: &ArgMatches) -> Option<String> {
-    args.value_of("root").map(ToString::to_string)
+pub(super) fn get_target_dir(args: &ArgMatches) -> Option<PathBuf> {
+    let path = if let Some(path) = args.value_of("target-dir") {
+        PathBuf::from(path)
+    } else if let Some(envvar) = env::var_os("CARGO_TARPAULIN_TARGET_DIR") {
+        PathBuf::from(envvar)
+    } else {
+        return None;
+    };
+
+    if !path.exists() {
+        let _ = create_dir_all(&path);
+    }
+    let path = if path.is_relative() {
+        env::current_dir()
+            .unwrap()
+            .join(path)
+            .canonicalize()
+            .unwrap()
+    } else {
+        path
+    };
+    Some(path)
+}
+
+pub(super) fn get_root(args: &ArgMatches) -> Option<PathBuf> {
+    args.value_of("root").map(PathBuf::from)
 }
 
 pub(super) fn get_ci(args: &ArgMatches) -> Option<CiService> {
@@ -95,19 +102,42 @@ pub(super) fn get_report_uri(args: &ArgMatches) -> Option<String> {
     args.value_of("report-uri").map(ToString::to_string)
 }
 
-pub(super) fn get_outputs(args: &ArgMatches) -> Vec<OutputFile> {
-    values_t!(args.values_of("out"), OutputFile).unwrap_or(vec![])
+pub(super) fn get_profile(args: &ArgMatches) -> Option<String> {
+    args.value_of("profile").map(ToString::to_string)
 }
 
-pub(super) fn get_output_directory(args: &ArgMatches) -> PathBuf {
-    if let Some(path) = args.value_of("output-dir") {
-        return PathBuf::from(path);
-    }
-    env::current_dir().unwrap()
+pub(super) fn get_outputs(args: &ArgMatches) -> Vec<OutputFile> {
+    values_t!(args.values_of("out"), OutputFile).unwrap_or_else(|_| vec![])
+}
+
+pub(super) fn get_output_directory(args: &ArgMatches) -> Option<PathBuf> {
+    args.value_of("output-dir").map(PathBuf::from)
 }
 
 pub(super) fn get_run_types(args: &ArgMatches) -> Vec<RunType> {
-    values_t!(args.values_of("run-types"), RunType).unwrap_or(vec![RunType::Tests])
+    let mut res = values_t!(args.values_of("run-types"), RunType).unwrap_or_else(|_| vec![]);
+    if args.is_present("lib") && !res.contains(&RunType::Lib) {
+        res.push(RunType::Lib);
+    }
+    if args.is_present("all-targets") && !res.contains(&RunType::AllTargets) {
+        res.push(RunType::AllTargets);
+    }
+    if args.is_present("benches") && !res.contains(&RunType::Benchmarks) {
+        res.push(RunType::Benchmarks);
+    }
+    if args.is_present("bins") && !res.contains(&RunType::Bins) {
+        res.push(RunType::Bins);
+    }
+    if args.is_present("examples") && !res.contains(&RunType::Examples) {
+        res.push(RunType::Examples);
+    }
+    if args.is_present("doc") && !res.contains(&RunType::Doctests) {
+        res.push(RunType::Doctests);
+    }
+    if args.is_present("tests") && !res.contains(&RunType::Tests) {
+        res.push(RunType::Tests);
+    }
+    res
 }
 
 pub(super) fn get_excluded(args: &ArgMatches) -> Vec<Regex> {
@@ -116,7 +146,6 @@ pub(super) fn get_excluded(args: &ArgMatches) -> Vec<Regex> {
 
 pub(super) fn regexes_from_excluded(strs: &[String]) -> Vec<Regex> {
     let mut files = vec![];
-
     for temp_str in strs {
         let s = &temp_str.replace(".", r"\.").replace("*", ".*");
 

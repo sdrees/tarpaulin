@@ -26,7 +26,7 @@ Below is the help-text for a thorough explanation of the flags and features
 available:
 
 ```
-cargo-tarpaulin version: 0.12.3
+cargo-tarpaulin version: 0.18.0-alpha1
 Tool to analyse test coverage of cargo projects
 
 USAGE:
@@ -35,9 +35,18 @@ USAGE:
 FLAGS:
         --all                    Alias for --workspace (deprecated)
         --all-features           Build all available features
+        --all-targets            Test all targets
+        --avoid-cfg-tarpaulin    Remove --cfg=tarpaulin from the RUSTFLAG
+        --benches                Test all benches
+        --bins                   Test all binaries
     -b, --branch                 Branch coverage: NOT IMPLEMENTED
         --count                  Counts the number of hits during coverage
         --debug                  Show debug output - this is used for diagnosing issues with tarpaulin
+        --doc                    Test only this library's documentation
+        --dump-traces            Log tracing events and save to a json file. Also, enabled when --debug is used
+        --examples               Test all examples
+        --follow-exec            Follow executed processes capturing coverage information if they're part of your
+                                 project.
         --force-clean            Adds a clean stage to work around cargo bugs that may affect coverage results
     -f, --forward                Forwards unexpected signals to test. Tarpaulin will still take signals it is expecting.
         --frozen                 Do not update Cargo.lock or any caches
@@ -46,41 +55,58 @@ FLAGS:
         --ignore-panics          Ignore panic macros in tests
         --ignore-tests           Ignore lines of test functions when collecting coverage
     -i, --ignored                Run ignored tests as well
+        --lib                    Test only this package's library unit tests
     -l, --line                   Line coverage
         --locked                 Do not update Cargo.lock
         --no-default-features    Do not include default features
+        --no-fail-fast           Run all tests regardless of failure
         --no-run                 Compile tests but don't run coverage
         --offline                Run without accessing the network
+        --print-rust-flags       Print the RUSTFLAGS options that tarpaulin will compile your program with and exit
+        --print-rustdoc-flags    Print the RUSTDOCFLAGS options that tarpaulin will compile any doctests with and exit
         --release                Build in release mode.
+        --tests                  Test all tests
     -V, --version                Prints version information
     -v, --verbose                Show extra output
         --workspace              Test all packages in the workspace
 
 OPTIONS:
     -Z <FEATURES>...                 List of unstable nightly only flags
+        --bench <NAME>...            Test only the specified bench target
+        --bin <NAME>...              Test only the specified binary
         --ciserver <SERVICE>         Name of service, supported services are:
                                      travis-ci, travis-pro, circle-ci, semaphore, jenkins and codeship.
                                      If you are interfacing with coveralls.io or another site you can also specify a
                                      name that they will recognise. Refer to their documentation for this.
+        --color <WHEN>               Coloring: auto, always, never [possible values: Auto, Always, Never]
+        --command <CMD>              cargo subcommand to run. So far only test and build are supported [possible values:
+                                     Test, Build]
         --config <FILE>              Path to a toml file specifying a list of options this will override any other
                                      options set
         --coveralls <KEY>            Coveralls key, either the repo token, or if you're using travis use $TRAVIS_JOB_ID
                                      and specify travis-{ci|pro} in --ciserver
+        --example <NAME>...          Test only the specified example
     -e, --exclude <PACKAGE>...       Package id specifications to exclude from coverage. See cargo help pkgid for more
                                      info
         --exclude-files <FILE>...    Exclude given files from coverage results has * wildcard
-        --features <FEATURE>...      Features to be included in the target project
+        --fail-under <PERCENTAGE>    Sets a percentage threshold for failure ranging from 0-100, if coverage is below
+                                     exit with a non-zero code
+        --features <FEATURES>...     Features to be included in the target project
+    -j, --jobs <N>                   Number of parallel jobs, defaults to # of CPUs
         --manifest-path <PATH>       Path to Cargo.toml
-    -o, --out <FMT>...               Output format of coverage report [possible values: Json, Toml, Stdout, Xml, Html,
-                                     Lcov]
+    -o, --out <FMT>...               Output format of coverage report [possible values: Json, Stdout, Xml, Html, Lcov]
         --output-dir <PATH>          Specify a custom directory to write report files
     -p, --packages <PACKAGE>...      Package id specifications for which package should be build. See cargo help pkgid
                                      for more info
+        --profile <NAME>             Build artefacts with the specified profile
         --report-uri <URI>           URI to send report to, only used if the option --coveralls is used
     -r, --root <DIR>                 Calculates relative paths to root directory. If --manifest-path isn't specified it
                                      will look for a Cargo.toml in root
-        --run-types <TYPE>...        Type of the coverage run [possible values: Tests, Doctests, Benchmarks, Examples]
+        --run-types <TYPE>...        Type of the coverage run [possible values: Tests, Doctests, Benchmarks, Examples,
+                                     Lib, Bins, AllTargets]
+        --target <TRIPLE>            Compilation target triple
         --target-dir <DIR>           Directory for all generated artifacts
+        --test <NAME>...             Test only the specified test target
     -t, --timeout <SECONDS>          Integer for the maximum time in seconds without response from test before timeout
                                      (default is 1 minute).
 
@@ -92,8 +118,8 @@ ARGS:
 
 If your tests or application make use of unix signals they may not work with
 tarpaulin. This is because tarpaulin relies on the sigtrap signal to catch when
-the instrumentation points are hit. The `--forward` option results in 
-forwarding the signals from process stops not caused by SIGSTOP, SIGSEGV or 
+the instrumentation points are hit. The `--forward` option results in
+forwarding the signals from process stops not caused by SIGSTOP, SIGSEGV or
 SIGILL to the test binary.
 
 ## Features
@@ -105,7 +131,8 @@ your setup and an example project and I'll attempt to fix it (please link us to
 a repo and the commit containing your project and paste the verbose output).
 
 * Line coverage
-* Uploading coverage to https://coveralls.io or https://codecov.io
+* Full compatibility with cargo test CLI arguments
+* Uploading coverage to <https://coveralls.io> or <https://codecov.io>
 * HTML report generation and other coverage report types
 * Coverage of tests, doctests, benchmarks and examples possible
 * Excluding irrelevant files from coverage
@@ -126,13 +153,17 @@ Tarpaulin used to rely on Cargo as a dependency and then require an ssl install
 as well as other libraries but now it uses your system cargo simplifying the
 installation and massively reducing the install time on CI.
 
+When using the [Nix](https://nixos.org/nix) package manager, the `nixpkgs.cargo-tarpaulin` package can be used.
+This ensures that tarpaulin will be built with the same rust version as the rest of your packages.
+
 ### Command line
 
 To get detailed help on available arguments when running tarpaulin call:
 
-```text
+```bash
 cargo tarpaulin --help
 ```
+
 Currently no options are required, if no root directory is defined Tarpaulin
 will run in the current working directory.
 
@@ -140,12 +171,11 @@ Below is a Tarpaulin run utilising one of our example projects. This is a
 relatively simple project to test and if you check the test, you can see the
 output correctly reports the lines the test hits.
 
-
-```text
+```bash
 cargo tarpaulin -v
 [INFO tarpaulin] Running Tarpaulin
 [INFO tarpaulin] Building project
-    Finished dev [unoptimized + debuginfo] target(s) in 0.00s                                                                                                                                                      
+    Finished dev [unoptimized + debuginfo] target(s) in 0.00s
 [DEBUG tarpaulin] Processing simple_project
 [INFO tarpaulin] Launching test
 [INFO tarpaulin] running /home/xd009642/code/rust/tarpaulin/tests/data/simple_project/target/debug/deps/simple_project-b0accf6671d080e0
@@ -162,7 +192,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 || Tested/Total Lines:
 || src/lib.rs: 5/6
 || src/unused.rs: 0/3
-|| 
+||
 55.56% coverage, 5/9 lines covered
 ```
 
@@ -174,7 +204,7 @@ expect the following output.
 cargo tarpaulin -v
 [INFO tarpaulin] Running Tarpaulin
 [INFO tarpaulin] Building project
-    Finished dev [unoptimized + debuginfo] target(s) in 0.00s                                                                                                                                                      
+    Finished dev [unoptimized + debuginfo] target(s) in 0.00s
 [DEBUG tarpaulin] Processing simple_project
 [INFO tarpaulin] Launching test
 [INFO tarpaulin] running /home/xd009642/code/rust/tarpaulin/tests/data/simple_project/target/debug/deps/simple_project-b0accf6671d080e0
@@ -188,7 +218,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 || Tested/Total Lines:
 || src/lib.rs: 6/6 +16.67%
 || src/unused.rs: 3/3 +100%
-|| 
+||
 100% coverage, 9/9 lines covered, +44.44% change in coverage
 ```
 
@@ -199,15 +229,58 @@ coverage results submitted (although you can still see them on the coveralls
 web interface). For an example of a project using Tarpaulin, you can check out
 my crate [keygraph-rs](https://github.com/xd009642/keygraph-rs).
 
-### Ignoring code in files.
+### Ignoring code in files
 
-Tarpaulin now allows you to ignore modules or functions using config attributes.
+Before tarpaulin 0.13.4 you could ignore code in blocks with
+`#[cfg_attr(tarpaulin, skip)]` this has changed with 0.13.4 and onwards
+and the new instructions are described below.
+
+Tarpaulin allows you to ignore modules or functions using attributes.
 Below is an example of ignoring the main function in a project:
 
 ```Rust
-#[cfg_attr(tarpaulin, skip)]
+#[cfg(not(tarpaulin_include))]
 fn main() {
     println!("I won't be included in results");
+}
+```
+
+However, the skip attribute only allows you to exclude code from coverage
+it doesn't change the code present in the binaries or what tests are ran.
+Because of this, `--cfg=tarpaulin` is used when building your project for
+Tarpaulin allowing you to also conditionally include/exclude code from
+compilation entirely. For example to have a test that isn't included in
+the test binaries when built with tarpaulin and cannot be ran just do:
+
+```Rust
+#[test]
+#[cfg(not(tarpaulin))]
+fn big_test_not_for_tarpaulin() {
+    // Something that would be very slow in tarpaulin or not work
+}
+```
+
+If you still want the test included in the binary just ignored by default
+you can use:
+
+```Rust
+#[test]
+#[cfg_attr(tarpaulin, ignore)]
+fn ignored_by_tarpaulin() {
+
+}
+```
+
+There is also nightly support for using tool attributes with tarpaulin for
+skip. For example:
+
+```Rust 
+#![feature(register_tool)]
+#![register_tool(tarpaulin)]
+
+#[tarpaulin::skip]
+fn main() {
+    println!("I won't be in coverage stats");
 }
 ```
 
@@ -227,10 +300,10 @@ The expected most common usecase is launching coverage via a CI service to
 upload to a site like codecov or coveralls. Given the built in support and
 ubiquity of travis-ci it seems prudent to document the required steps here for
 new users. To follow these steps you'll first need a travis-ci and a project setup
-for your coverage reporting site of choice. 
+for your coverage reporting site of choice.
 
 We recommend taking the minimal rust .travis.yml, installing the libssl-dev
-dependency tarpaulin has and then running Tarpaulin with the version of 
+dependency tarpaulin has and then running Tarpaulin with the version of
 rustc you require. Tarpaulin is installed in `before_cache` to allow it to be cached
 and prevent having to reinstall every Travis run. You can also replace `cargo test`
 with a verbose run of tarpaulin to see the test results as well as coverage output.
@@ -244,9 +317,8 @@ the settings of your codecov project.
 
 ```yml
 language: rust
-sudo: required # required for some configurations
 # tarpaulin has only been tested on bionic and trusty other distros may have issues
-dist: bionic 
+dist: bionic
 addons:
     apt:
         packages:
@@ -286,13 +358,45 @@ If you rely on certain nightly features you may need to change the `before_scrip
 will speed up your CI runs.
 
 Alternatively, there are the prebuilt docker images or the travis-install shell script.
-The travis-install script will install the latest tagged release built on travis to your 
-travis instance and significantly speeds up the travis builds. You can install via that script 
+The travis-install script will install the latest tagged release built on travis to your
+travis instance and significantly speeds up the travis builds. You can install via that script
 using `bash <(curl https://raw.githubusercontent.com/xd009642/tarpaulin/master/travis-install.sh)`.
 
 The prebuilt binary is built using github actions ubuntu:latest image, because of this it
 doesn't work on xenial or trusty, but it works on bionic. You should still keep the rest
 of the recommended travis settings.
+
+### GitHub Actions
+
+File `.github/workflows/coverage.yml`
+Example how to run coverage within `docker` with `seccomp` in GitHub Actions and push the result
+to <codecov.io>.
+
+```yml
+name:                           coverage
+
+on:                             [push]
+jobs:
+  test:
+    name:                       coverage
+    runs-on:                    ubuntu-latest
+    container:
+      image:                    <your [CI] docker image with installed tarpaulin>
+      options:                  --security-opt seccomp=unconfined
+    steps:
+      - name:                   Checkout repository
+        uses:                   actions/checkout@v2
+
+      - name:                   Generate code coverage
+        run: |
+          cargo +nightly tarpaulin --verbose --all-features --workspace --timeout 120 --out Xml
+
+      - name:                   Upload to codecov.io
+        uses:                   codecov/codecov-action@v1
+        with:
+          # token:                ${{secrets.CODECOV_TOKEN}} # not required for public repos
+          fail_ci_if_error:     true
+```
 
 ### CircleCI
 
@@ -315,7 +419,7 @@ jobs:
 To get the coverage results showing up in your Gitlab pipelines add the following regex to the `Test
 coverage parsing` section in the pipelines settings.
 
-```
+```yml
 ^\d+.\d+% coverage
 ```
 
@@ -323,7 +427,7 @@ For installation add `cargo install cargo-tarpaulin -f` to the script section.
 
 ### Docker
 
-Tarpaulin has builds deployed to [docker-hub](https://hub.docker.com/r/xd009642/tarpaulin/), 
+Tarpaulin has builds deployed to [docker-hub](https://hub.docker.com/r/xd009642/tarpaulin/),
 to run Tarpaulin on any system that has Docker, run this in your project directory:
 
 ```text
@@ -331,8 +435,8 @@ docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpau
 ```
 
 This builds your project inside Docker and runs Tarpaulin without any arguments. There are
-also tags available for the latest version on the develop branch in stable or nightly. And 
-versions after 0.5.6 will have the latest release built with the rust stable and nightly 
+also tags available for the latest version on the develop branch in stable or nightly. And
+versions after 0.5.6 will have the latest release built with the rust stable and nightly
 compilers. To get the latest development version built with rustc-nightly run the following:
 
 ```text
@@ -349,17 +453,17 @@ docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpau
 ### Config file
 
 Tarpaulin has a config file setting where multiple coverage setups can be
-encoded in a toml file. This can be provided by an argumnet or if a 
+encoded in a toml file. This can be provided by an argument or if a
 `.tarpaulin.toml` or `tarpaulin.toml` is present in the same directory as
-the projects manifest or in the root directory that will be used unless 
+the projects manifest or in the root directory that will be used unless
 `--ignore-config` is passed. Below is an example file:
 
 ```toml
 [feature_a_coverage]
-features = ["feature_a"]
+features = "feature_a"
 
-[feature_b_coverage]
-features = ["feature_b"]
+[feature_a_and_b_coverage]
+features = "feature_a feature_b"
 release = true
 
 [report]
@@ -369,10 +473,10 @@ out = ["Html", "Xml"]
 
 Here we'd create three configurations, one would run your tests with
 `feature_a` enabled, and the other with the tests built in release and
-`feature_b` enabled. The last configuration uses a reserved configuration name
-`report` and this doesn't result in a coverage run but affects the report 
-output. This is a reserved feature name and any non-reporting based options
-chosen will have no effect on the output of tarpaulin.
+both `feature_a` and `feature_b` enabled. The last configuration uses a reserved
+configuration name `report` and this doesn't result in a coverage run but
+affects the report output. This is a reserved feature name and any non-reporting
+based options chosen will have no effect on the output of tarpaulin.
 
 For reference on available keys and their types refer to the CLI help text
 at the start of the readme or `src/config/mod.rs` for the concrete types
@@ -382,20 +486,23 @@ follow `--` in tarpaulin use `args` in the toml file.
 Setting the field `config` will have no effect on the run as it won't be parsed
 for additional configuration.
 
-## Extending Tarpaulin.
+For the flags `--lib`, `--examples`, `--benches`, `--tests`, `--all-targets`,
+`--doc`, `--bins` use the `run-types` entry in the config file.
+
+## Extending Tarpaulin
 
 There are some tools available which can extend tarpaulin functionality for
 other potential user needs.
 
 ### Procedural Macros
 
-Normally, Tarpaulin can't report on code coverage within the code for a 
+Normally, Tarpaulin can't report on code coverage within the code for a
 procedural macro. You'll need to add a test that expands the macro at run-time
 in order to get those stats. The
 [`runtime-macros` crate](https://crates.io/crates/runtime-macros) was made for
 this purpose, and its documentation describes how to use it with Tarpaulin.
 
-### Pycobertura 
+### Pycobertura
 
 [`pycobertura`](https://pypi.python.org/pypi/pycobertura) is a python library
 for working with cobertura reports. It offers a report diffing tool as well as
@@ -415,7 +522,7 @@ report be mindful of this if diffing reports between multiple commits.
 ## Issues and Contributing
 
 Issues, feature requests and pull requests are always welcome! For a guide on
-how to approach bugs found in Tarpaulin and adding features please check 
+how to approach bugs found in Tarpaulin and adding features please check
 [CONTRIBUTING](CONTRIBUTING.md).
 
 Rust 1.23 introduced a regression in the compiler affecting tarpaulin's
@@ -423,24 +530,20 @@ accuracy. If you see missing lines or files, check your compiler version.
 
 ## Roadmap
 
-- [x] Line coverage for tests
-- [ ] Branch coverage for tests
-- [ ] Condition coverage for tests
-- [x] Annotated coverage reports
-- [x] Coverage reports in the style of existing tools (i.e. kcov)
-- [x] Integration with 3rd party tools like coveralls or codecov
-- [x] Optional coverage statistics for doctests (nightly only [tracking issue](https://github.com/rust-lang/rust/issues/56925))
-- [ ] MCDC coverage reports
-- [ ] OSX support 
-- [ ] Windows support
+* [x] Line coverage for tests
+* [ ] Branch coverage for tests
+* [ ] Condition coverage for tests
+* [x] Annotated coverage reports
+* [x] Coverage reports in the style of existing tools (i.e. kcov)
+* [x] Integration with 3rd party tools like coveralls or codecov
+* [x] Optional coverage statistics for doctests (nightly only [tracking issue](https://github.com/rust-lang/rust/issues/56925))
+* [ ] MCDC coverage reports
+* [ ] OSX support
+* [ ] Windows support
 
 ## License
 
 Tarpaulin is currently licensed under the terms of both the MIT license and the
-Apache License (Version 2.0). See LICENSE-MIT and LICENSE-APACHE for more details.
+Apache License (Version 2.0). See LICENSE-MIT and LICENSE-APACHE for more 
+details.
 
-## Thanks
-
-I wouldn't have been able to make progress as quickly in this project without
-Joseph Kain's blog on writing a debugger in Rust and C. It's a great read, so I
-recommend you check it out [here](http://system.joekain.com/debugger/).
