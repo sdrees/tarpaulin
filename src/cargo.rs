@@ -12,7 +12,6 @@ use std::io;
 use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-
 use toml::Value;
 use tracing::{error, info, trace, warn};
 use walkdir::{DirEntry, WalkDir};
@@ -40,7 +39,7 @@ impl CargoVersionInfo {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub struct TestBinary {
     path: PathBuf,
     ty: Option<RunType>,
@@ -164,6 +163,19 @@ lazy_static! {
 
 pub fn get_tests(config: &Config) -> Result<Vec<TestBinary>, RunError> {
     let mut result = vec![];
+    if config.force_clean {
+        let cleanup_dir = if config.release {
+            config.target_dir().join("release")
+        } else {
+            config.target_dir().join("debug")
+        };
+        info!("Cleaning project");
+        if cleanup_dir.exists() {
+            if let Err(e) = remove_dir_all(cleanup_dir) {
+                error!("Cargo clean failed: {}", e);
+            }
+        }
+    }
     let manifest = match config.manifest.as_path().to_str() {
         Some(s) => s,
         None => "Cargo.toml",
@@ -197,15 +209,6 @@ fn run_cargo(
     ty: Option<RunType>,
     result: &mut Vec<TestBinary>,
 ) -> Result<(), RunError> {
-    if config.force_clean {
-        if let Ok(clean) = Command::new("cargo").arg("clean").output() {
-            info!("Cleaning project");
-            if !clean.status.success() {
-                error!("Cargo clean failed:");
-                println!("{}", std::str::from_utf8(&clean.stderr).unwrap_or_default());
-            }
-        }
-    }
     let mut cmd = create_command(manifest, config, ty);
     if ty != Some(RunType::Doctests) {
         cmd.stdout(Stdio::piped());
@@ -281,6 +284,19 @@ fn run_cargo(
         let should_panics = get_panic_candidates(&dir_entries, config);
         for dt in &dir_entries {
             let mut tb = TestBinary::new(dt.path().to_path_buf(), ty);
+            let mut current_dir = dt.path();
+            loop {
+                if current_dir.is_dir() && current_dir.join("Cargo.toml").exists() {
+                    tb.cargo_dir = Some(current_dir.to_path_buf());
+                    break;
+                }
+                match current_dir.parent() {
+                    Some(s) => {
+                        current_dir = s;
+                    }
+                    None => break,
+                }
+            }
             // Now to do my magic!
             if let Some(meta) = DocTestBinaryMeta::new(dt.path()) {
                 if let Some(lines) = should_panics.get(&meta.prefix) {
